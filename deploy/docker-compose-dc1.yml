@@ -1,0 +1,86 @@
+version: "3.9"
+
+services:
+
+  nats1:
+    image: nats:latest
+    container_name: nats1-dc1
+    command: ["-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./dc1-1.conf:/etc/nats/nats.conf
+    ports:
+      - "4211:4222"   # client
+      - "8211:8222"   # client
+
+
+  nats2:
+    image: nats:latest
+    container_name: nats2-dc1
+    command: ["-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./dc1-2.conf:/etc/nats/nats.conf
+    ports:
+      - "4212:4222"   # client
+
+    depends_on:
+      - nats1
+
+  nats3:
+    image: nats:latest
+    container_name: nats3-dc1
+    command: ["-c", "/etc/nats/nats.conf"]
+    volumes:
+      - ./dc1-3.conf:/etc/nats/nats.conf
+    ports:
+      - "4213:4222"   # client
+    depends_on:
+      - nats2
+
+  app1:
+    image: mrtdeh/nats-client
+    tty: true
+    stdin_open: true
+    container_name: dc1-app1
+    environment:
+      - NATS_URL=nats://nats1-dc1:4222,nats://nats2-dc1:4222,nats://nats3-dc1:4222
+      - NAME=app1
+      - DC=dc1
+    volumes:
+      - "/home/mrtdeh/Downloads/:/tmp"
+    depends_on:
+      - nats1
+      - nats2
+      - nats3
+
+  app2:
+    image: mrtdeh/nats-client
+    tty: true
+    stdin_open: true
+    container_name: dc1-app2
+    environment:
+      - NATS_URL=nats://nats1-dc1:4222,nats://nats2-dc1:4222,nats://nats3-dc1:4222
+      - NAME=app2
+      - DC=dc1
+    depends_on:
+      - nats1
+      - nats2
+      - nats3
+
+  app3:
+    image: mrtdeh/nats-client
+    container_name: dc1-app3
+    tty: true
+    stdin_open: true
+    environment:
+      - NATS_URL=nats://nats1-dc1:4222,nats://nats2-dc1:4222,nats://nats3-dc1:4222
+      - NAME=app3
+      - DC=dc1
+    depends_on:
+      - nats1
+      - nats2
+      - nats3
+
+networks:
+  default:
+    external: true
+    name: nats-net

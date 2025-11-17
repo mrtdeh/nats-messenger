@@ -1,0 +1,8 @@
+FROM alpine:latest AS build-release-stage
+
+WORKDIR /
+COPY ../build/bin/nats-client /nats-client
+# USER nonroot:nonroot
+ENV LOG_LEVEL=debug
+# Run
+ENTRYPOINT ["/nats-client"]

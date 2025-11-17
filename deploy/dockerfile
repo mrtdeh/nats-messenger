@@ -1,0 +1,26 @@
+FROM golang:1.24.4 AS build-stage
+
+# RUN apt-get update && \
+#     apt-get install -y jq 
+# Set destination for COPY
+WORKDIR /app
+# Download Go modules
+COPY ../go.mod ./
+# RUN go env -w GOPROXY='http://192.168.23.11:8081/repository/go-proxy/'
+# RUN go env -w GOPRIVATE='gitlab.siem.local'
+# RUN go env -w GOINSECURE='gitlab.siem.local'
+# RUN go env -w GONOPROXY='gitlab.siem.local'
+# RUN go env -w GONOSUMDB='gitlab.siem.local'
+RUN go env -w GOPROXY=https://goproxy.io,direct
+# # Download dependecies and build
+# COPY .netrc .gitconfig /root
+COPY . ./
+RUN CGO_ENABLED=0 GOOS=linux go build -o /nats-client .
+# Create a new image with builded app
+# FROM gcr.io/distroless/base-debian11 AS build-release-stage
+FROM alpine:latest AS build-release-stage
+
+WORKDIR /
+COPY --from=build-stage /nats-client /nats-client
+
+ENTRYPOINT ["/nats-client"]
