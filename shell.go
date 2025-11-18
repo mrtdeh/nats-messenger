@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 )
@@ -44,7 +43,7 @@ func (sh *Shell) Run(parser ParserFunc) {
 		cmd, params := sh.handleCommand(line)
 		err = parser(sh, cmd, params)
 		if err != nil {
-			log.Println("Command Error:\n", err)
+			fmt.Println("Error:\n", err)
 		}
 	}
 }
