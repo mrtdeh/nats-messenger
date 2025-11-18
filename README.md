@@ -43,12 +43,12 @@ docker attach dc1-app1
 Once inside the container, the CLI will be running. The commands available are:
 
 ### Command Description
-**goto** : Change the current messaging path.
-**send** : Publish a chat message to the current path.
-**sendfile** : Stream a file to the current path.
-**nodes** : List all available node's path in the all datacenters.
-**dcs** : List all datacenters in the cluster.
-**exit / quit** : Exit the CLI.
+- **goto** : Change the current messaging path.
+- **send** : Publish a chat message to the current path.
+- **sendfile** : Stream a file to the current path.
+- **nodes** : List all available node's path in the all datacenters.
+- **dcs** : List all datacenters in the cluster.
+- **exit / quit** : Exit the CLI.
 
 ### Usage
 **List of node's path with health(ok/nok) :**
