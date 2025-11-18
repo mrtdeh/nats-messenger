@@ -76,7 +76,6 @@ func newClient(natsURL string) (*Client, error) {
 		return nil, fmt.Errorf("CreateBuckets : %s", err)
 	}
 
-	fmt.Println("debug 1")
 	if err := createDefaultStreams(ctx, js); err != nil {
 		return nil, fmt.Errorf("createDefaultStreams : %s", err)
 	}
@@ -104,7 +103,6 @@ func waitForLoadJetstream(ctx context.Context, js jetstream.JetStream, timeout t
 func waitForLoadStreams(ctx context.Context, js jetstream.JetStream, timeout time.Duration) error {
 	start := time.Now()
 	for time.Since(start) < timeout {
-		fmt.Println("debug 4")
 		debugPrint("try again to load streams")
 		_, err := js.Stream(ctx, "CHAT")
 		if err != nil {
@@ -121,7 +119,6 @@ func waitForLoadStreams(ctx context.Context, js jetstream.JetStream, timeout tim
 		debugPrint("streams is loaded")
 		return nil
 	}
-	fmt.Println("debug 5")
 	return fmt.Errorf("timout")
 }
 
@@ -139,7 +136,6 @@ func createDefaultStreams(ctx context.Context, js jetstream.JetStream) error {
 		}
 		fmt.Println("CHAT stream created")
 	}
-	fmt.Println("debug 2")
 
 	_, err = js.Stream(ctx, "FILE")
 	if err != nil {
@@ -155,7 +151,6 @@ func createDefaultStreams(ctx context.Context, js jetstream.JetStream) error {
 		}
 		fmt.Println("FILE stream created")
 	}
-	fmt.Println("debug 3")
 	waitForLoadStreams(ctx, js, time.Second*5)
 
 	return nil

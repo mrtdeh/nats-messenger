@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -75,13 +76,17 @@ func main() {
 		case "goto":
 			_, err := nc.cli.kvs.Get(BUCKET_PERSISTENSE, args)
 			if err != nil {
-				return err
+				if errors.Is(err, jetstream.ErrKeyNotFound) {
+					return fmt.Errorf("you'r entred path not found : %s", args)
+				} else {
+					return err
+				}
 			}
 
 			sh.Goto(args)
 		case "send":
 			if sh.path == "root" || sh.path == "" {
-				return fmt.Errorf("not any path selected")
+				return fmt.Errorf("first, select a path with 'goto' command")
 			}
 
 			subject := "chat." + strings.Join(p[1:], ".")
@@ -91,7 +96,7 @@ func main() {
 			}
 		case "sendfile":
 			if sh.path == "root" || sh.path == "" {
-				return fmt.Errorf("not any path selected")
+				return fmt.Errorf("first, select a path with 'goto' command")
 			}
 
 			subject := "file." + strings.Join(p[1:], ".")
