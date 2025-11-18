@@ -66,7 +66,7 @@ func newClient(natsURL string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := waitForLoading(ctx, js, time.Second*20); err != nil {
+	if err := waitForLoadJetstream(ctx, js, time.Second*20); err != nil {
 		return nil, err
 	}
 
@@ -76,43 +76,89 @@ func newClient(natsURL string) (*Client, error) {
 		return nil, fmt.Errorf("CreateBuckets : %s", err)
 	}
 
-	if err := ensureChatStream(ctx, js); err != nil {
-		return nil, fmt.Errorf("ensureChatStream : %s", err)
+	fmt.Println("debug 1")
+	if err := createDefaultStreams(ctx, js); err != nil {
+		return nil, fmt.Errorf("createDefaultStreams : %s", err)
 	}
 
 	return &Client{nc, js, kvs, c}, nil
 }
 
-func waitForLoading(ctx context.Context, js jetstream.JetStream, timeout time.Duration) error {
+func waitForLoadJetstream(ctx context.Context, js jetstream.JetStream, timeout time.Duration) error {
 	start := time.Now()
 	for time.Since(start) < timeout {
 		debugPrint("try again to test jetstream")
-		ai, err := js.AccountInfo(ctx)
+		_, err := js.AccountInfo(ctx)
 		if err != nil {
 			debugPrint(err.Error())
 			time.Sleep(time.Second)
 			continue
 		}
-		debugPrint("client connected : ", ai.Domain)
+		debugPrint("jetstream is active")
 		return nil
 	}
 
 	return fmt.Errorf("timout")
 }
 
-func ensureChatStream(ctx context.Context, js jetstream.JetStream) error {
-	_, err := js.Stream(ctx, "CHAT")
-	if err == nil {
+func waitForLoadStreams(ctx context.Context, js jetstream.JetStream, timeout time.Duration) error {
+	start := time.Now()
+	for time.Since(start) < timeout {
+		fmt.Println("debug 4")
+		debugPrint("try again to load streams")
+		_, err := js.Stream(ctx, "CHAT")
+		if err != nil {
+			debugPrint(err.Error())
+			time.Sleep(time.Second)
+			continue
+		}
+		_, err = js.Stream(ctx, "FILE")
+		if err != nil {
+			debugPrint(err.Error())
+			time.Sleep(time.Second)
+			continue
+		}
+		debugPrint("streams is loaded")
 		return nil
 	}
+	fmt.Println("debug 5")
+	return fmt.Errorf("timout")
+}
 
-	_, err = js.CreateStream(ctx, jetstream.StreamConfig{
-		Name:      "CHAT",
-		Subjects:  []string{"chat.>"},
-		Storage:   jetstream.FileStorage,
-		Retention: jetstream.LimitsPolicy,
-	})
-	return err
+func createDefaultStreams(ctx context.Context, js jetstream.JetStream) error {
+	_, err := js.Stream(ctx, "CHAT")
+	if err != nil {
+		_, err = js.CreateStream(ctx, jetstream.StreamConfig{
+			Name:      "CHAT",
+			Subjects:  []string{"chat.>"},
+			Storage:   jetstream.FileStorage,
+			Retention: jetstream.LimitsPolicy,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Println("CHAT stream created")
+	}
+	fmt.Println("debug 2")
+
+	_, err = js.Stream(ctx, "FILE")
+	if err != nil {
+		_, err = js.CreateStream(ctx, jetstream.StreamConfig{
+			Name:      "FILE",
+			Subjects:  []string{"file.>"},
+			Storage:   jetstream.FileStorage,
+			Retention: jetstream.LimitsPolicy,
+			MaxBytes:  100 * 1024 * 3, // 100MB
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Println("FILE stream created")
+	}
+	fmt.Println("debug 3")
+	waitForLoadStreams(ctx, js, time.Second*5)
+
+	return nil
 }
 
 func getNodePath(cnf Config) string {

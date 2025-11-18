@@ -1,253 +1,201 @@
 package main
 
-// const (
-// 	FileStream            = "STREAM_FILE"
-// 	BaseFileStreamSubject = "file.stream"
-// )
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path"
+	"sync"
+	"time"
 
-// func sendFileStream(app *NatsConnector, filePath string) error {
-// 	streamName := app.ToLocalStream(FileStream)
-// 	subjectName := app.ToLocalSubject(BaseFileStreamSubject)
-// 	js := app.GetJetStream()
+	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+)
 
-// 	_, err := js.StreamInfo(streamName)
-// 	if err != nil {
-// 		_, err := js.AddStream(&nats.StreamConfig{
-// 			Name:     streamName,
-// 			Subjects: []string{subjectName},
-// 			Storage:  nats.FileStorage,
-// 			Replicas: 1,
-// 		})
-// 		if err != nil {
-// 			log.Fatalf("add stream error %v", err)
-// 		}
-// 	}
+const (
+	FileStream            = "STREAM_FILE"
+	BaseFileStreamSubject = "file.stream"
+)
 
-// 	f, err := os.Open(filePath)
-// 	if err != nil {
-// 		return fmt.Errorf("err2 : %v", err)
-// 	}
-// 	defer f.Close()
+type fileMeta struct {
+	Size int64
+	Name string
+}
 
-// 	// info, err := objStore.Put(&nats.ObjectMeta{Name: objectName}, f)
-// 	// if err != nil {
-// 	// 	return fmt.Errorf("err3 : %v", err)
-// 	// }
-// 	// fmt.Println("Uploaded:", info)
-// 	return nil
-// }
+func sendFileStream(ctx context.Context, app *NatsConnector, filePath, subject string) error {
+	js := app.GetJetStream()
+	uid := uuid.New().String()
 
-// func getFileStream(nc *nats.Conn, objectName, destPath string) error {
-// 	js, err := nc.JetStream()
-// 	if err != nil {
-// 		return err
-// 	}
+	fmt.Printf("opening file : '%s'\n", filePath)
+	f, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
-// 	objStore, err := js.ObjectStore(objectName)
-// 	if err != nil {
-// 		return fmt.Errorf("err1 : %v", err)
-// 	}
+	stat, _ := f.Stat()
+	fileSize := stat.Size()
+	var fs int64
+	buf := bufio.NewReader(f)
+	chunk := make([]byte, 1024)
 
-// 	out, err := os.Create(destPath)
-// 	if err != nil {
-// 		return fmt.Errorf("err4 : %v", err)
-// 	}
-// 	defer out.Close()
+	var fm = fileMeta{
+		Size: fileSize,
+		Name: f.Name(),
+	}
+	data, _ := json.Marshal(fm)
+	msg := &nats.Msg{
+		Subject: subject,
+		Data:    data,
+		Header:  nats.Header{},
+	}
+	msg.Header.Set("action", "new")
+	msg.Header.Set("id", uid)
+	msg.Header.Set("from", fmt.Sprintf("%s-%s", app.cnf.DC, app.cnf.Name))
 
-// 	obj, err := objStore.Get(objectName)
-// 	if err != nil {
-// 		return fmt.Errorf("err5 : %v", err)
-// 	}
+	_, err = js.PublishMsg(ctx, msg)
+	if err != nil {
+		return err
+	}
 
-// 	_, err = io.Copy(out, obj)
-// 	if err != nil {
-// 		return fmt.Errorf("err6 : %v", err)
-// 	}
-// 	fmt.Println("Downloaded OK")
-// 	return nil
-// }
+	fmt.Printf("send new file name=%s size=%d id=%s", fm.Name, fm.Size, uid)
 
-// type MetaFile struct {
-// 	Hash string
-// 	Name string
-// 	Size int
-// }
+	for {
+		n, err := buf.Read(chunk)
+		if err != nil {
+			return err
+		}
 
-// func recvStream(app *NatsConnector, destPath string) error {
-// 	nc := app.cli.nc
-// 	metaChan := make(chan *nats.Msg, 64)
+		msg.Data = chunk[:n]
+		msg.Header.Set("action", "chunk")
 
-// 	// Subscribe to metadata messages
-// 	metaSub, err := nc.ChanSubscribe(app.ToLocalSubject("file.meta"), metaChan)
-// 	if err != nil {
-// 		return fmt.Errorf("meta subscribe: %w", err)
-// 	}
-// 	defer metaSub.Unsubscribe()
+		_, err = js.PublishMsg(ctx, msg)
+		if err != nil {
+			return err
+		}
 
-// 	fmt.Println("📡 Listening for file meta...")
+		fs += int64(n)
+		if fs >= fileSize {
+			fmt.Printf("send file finish : %d/%d\n", fs, fileSize)
+			break
+		}
 
-// 	for msg := range metaChan {
-// 		var mt MetaFile
-// 		if err := json.Unmarshal(msg.Data, &mt); err != nil {
-// 			msg.Respond([]byte("error: bad meta json"))
-// 			continue
-// 		}
+	}
 
-// 		// Confirm we got the meta
-// 		msg.Respond([]byte("ok"))
-// 		fmt.Printf("🧩 New file request: %s (%d bytes) [hash:%s]\n", mt.Name, mt.Size, mt.Hash)
+	return nil
+}
 
-// 		// Launch a new goroutine for this file
-// 		go func(mt MetaFile) {
-// 			chunkSubj := app.ToLocalSubject("file.chunk", mt.Hash)
-// 			chunkChan := make(chan *nats.Msg, 512)
+func startFileReceiver(ctx context.Context, app *NatsConnector, destPath, receiveSubject string) error {
+	js := app.GetJetStream()
 
-// 			sub, err := nc.ChanSubscribe(chunkSubj, chunkChan)
-// 			if err != nil {
-// 				fmt.Println("❌ cannot subscribe to chunks:", err)
-// 				return
-// 			}
-// 			defer sub.Unsubscribe()
+	cons, err := js.CreateOrUpdateConsumer(ctx, "FILE", jetstream.ConsumerConfig{
+		// AckPolicy:     jetstream.AckExplicitPolicy,
+		FilterSubject:     receiveSubject,
+		InactiveThreshold: 1000 * time.Minute,
+	})
+	if err != nil {
+		return fmt.Errorf("error in get/create FILE stream consumer : %v", err)
+	}
 
-// 			dest := filepath.Join(destPath, mt.Name)
-// 			out, err := os.Create(dest)
-// 			if err != nil {
-// 				fmt.Println("❌ cannot create file:", err)
-// 				return
-// 			}
-// 			defer out.Close()
+	type fileState struct {
+		meta         fileMeta
+		writer       *os.File
+		receivedSize int64
+		totalSize    int64
+	}
 
-// 			var received int
-// 			timeout := time.NewTimer(30 * time.Second)
+	var files = make(map[string]*fileState)
+	var filesMu sync.Mutex
 
-// 			for {
-// 				select {
-// 				case chunk := <-chunkChan:
-// 					if chunk == nil {
-// 						continue
-// 					}
-// 					n, err := out.Write(chunk.Data)
-// 					if err != nil {
-// 						fmt.Println("❌ write failed:", err)
-// 						return
-// 					}
-// 					received += n
-// 					fmt.Printf("⬇️  [%s] %d/%d bytes\n", mt.Name, received, mt.Size)
+	cons.Consume(func(msg jetstream.Msg) {
+		fmt.Println("debug test")
+		h := msg.Headers()
+		id := h.Get("id")
+		from := h.Get("from")
+		action := h.Get("action")
 
-// 					if received >= mt.Size {
-// 						fmt.Printf("✅ File complete: %s\n", dest)
-// 						err := nc.Publish(app.ToLocalSubject("file.done", mt.Hash), []byte(dest))
-// 						if err != nil {
-// 							fmt.Println("❌ write failed:", err)
-// 							return
-// 						}
-// 						return
-// 					}
-// 					timeout.Reset(30 * time.Second)
+		if id == "" {
+			fmt.Println("message without id, ignored")
+			return
+		}
 
-// 				case <-timeout.C:
-// 					fmt.Printf("⚠️ Timeout waiting for chunks of %s\n", mt.Name)
-// 					return
-// 				}
-// 			}
-// 		}(mt)
-// 	}
-// 	return nil
-// }
+		switch action {
 
-// func sendStream(app *NatsConnector, filePath string, progress *float64) (string, error) {
-// 	nc := app.cli.nc
+		// -----------------------
+		//  NEW FILE
+		// -----------------------
+		case "new":
+			var fm fileMeta
+			if err := json.Unmarshal(msg.Data(), &fm); err != nil {
+				fmt.Println("meta decode error:", err)
+				return
+			}
 
-// 	file, err := os.Open(filePath)
-// 	if err != nil {
-// 		return "", fmt.Errorf("open file: %w", err)
-// 	}
-// 	defer file.Close()
+			filesMu.Lock()
+			defer filesMu.Unlock()
 
-// 	info, err := file.Stat()
-// 	if err != nil {
-// 		return "", fmt.Errorf("stat file: %w", err)
-// 	}
+			if _, exists := files[id]; !exists {
 
-// 	hash := sha1.New()
-// 	if _, err := io.Copy(hash, file); err != nil {
-// 		return "", fmt.Errorf("hash: %w", err)
-// 	}
-// 	file.Seek(0, 0) // برگرد به اول فایل
-// 	hashStr := fmt.Sprintf("%x", hash.Sum(nil))
+				f, err := os.Create(path.Join(destPath, fm.Name))
+				if err != nil {
+					fmt.Println("file create error:", err)
+					return
+				}
 
-// 	meta := MetaFile{
-// 		Name: info.Name(),
-// 		Size: int(info.Size()),
-// 		Hash: hashStr,
-// 	}
+				files[id] = &fileState{
+					meta:         fm,
+					writer:       f,
+					receivedSize: 0,
+					totalSize:    fm.Size,
+				}
 
-// 	metaBytes, _ := json.Marshal(meta)
-// 	metaSubj := app.ToLocalSubject("file.meta")
-// 	chunkSubj := app.ToLocalSubject(fmt.Sprintf("file.chunk.%s", hashStr))
-// 	doneSubj := app.ToLocalSubject(fmt.Sprintf("file.done.%s", hashStr))
+				fmt.Printf("NEW file id=%s name=%s size=%d\n",
+					id, fm.Name, fm.Size)
+			}
 
-// 	// Send file request
-// 	fmt.Printf("📤 Sending meta: %s (%d bytes) [%s]\n", meta.Name, meta.Size, meta.Hash)
-// 	msg, err := nc.Request(metaSubj, metaBytes, 5*time.Second)
-// 	if err != nil {
-// 		return "", fmt.Errorf("meta send failed: %w", err)
-// 	}
-// 	if string(msg.Data) != "ok" {
-// 		return "", fmt.Errorf("receiver not ready: %s", string(msg.Data))
-// 	}
-// 	fmt.Println("✅ Receiver ready, sending chunks...")
+		// -----------------------
+		//  FILE CHUNK
+		// -----------------------
+		case "chunk":
 
-// 	// Send Chunks
-// 	const chunkSize = 64 * 1024 // 64KB
-// 	buf := make([]byte, chunkSize)
-// 	sent := 0
+			filesMu.Lock()
+			fs, ok := files[id]
+			filesMu.Unlock()
 
-// 	for {
-// 		n, err := file.Read(buf)
-// 		if n > 0 {
-// 			err := nc.Publish(chunkSubj, buf[:n])
-// 			if err != nil {
-// 				return "", fmt.Errorf("publish chunk: %w", err)
-// 			}
-// 			sent += n
-// 			p := float64(sent) / float64(meta.Size) * 100
-// 			if progress != nil {
-// 				*progress = p
-// 			}
+			if !ok {
+				fmt.Println("chunk received for unknown file id:", id, from)
+				time.Sleep(time.Second * 5)
+				return
+			}
 
-// 			fmt.Printf("📦 Sent chunk: %d/%d bytes\n", sent, meta.Size)
-// 		}
-// 		if err == io.EOF {
-// 			break
-// 		}
-// 		if err != nil {
-// 			return "", fmt.Errorf("read file: %w", err)
-// 		}
-// 	}
+			_, err := fs.writer.Write(msg.Data())
+			if err != nil {
+				fmt.Println("write error:", err)
+				return
+			}
 
-// 	// Wait for Done
-// 	doneChan := make(chan *nats.Msg, 1)
-// 	sub, err := nc.ChanSubscribe(doneSubj, doneChan)
-// 	if err != nil {
-// 		return "", fmt.Errorf("subscribe done: %w", err)
-// 	}
-// 	defer sub.Unsubscribe()
+			fs.receivedSize += int64(len(msg.Data()))
 
-// 	var destPath string
-// 	select {
-// 	case msg := <-doneChan:
-// 		if string(msg.Data) != "" {
-// 			destPath = string(msg.Data)
-// 			fmt.Printf("🎉 File sent successfully: %s\n", meta.Name)
-// 		} else {
-// 			fmt.Printf("⚠️ Receiver returned unexpected message: %s\n", string(msg.Data))
-// 			return "", fmt.Errorf("destination done error: %w", err)
-// 		}
-// 	case <-time.After(10 * time.Second):
-// 		fmt.Println("⏱️ Timeout waiting for done-ok")
-// 		return "", fmt.Errorf("destination done timeout: %w", err)
-// 	}
+			fmt.Printf("received %d/%d for id=%s\n",
+				fs.receivedSize, fs.totalSize, id)
 
-// 	return destPath, nil
-// }
+			if fs.receivedSize == fs.totalSize {
+				fmt.Printf("file id=%s completed (%s)\n", id, fs.meta.Name)
+				fs.writer.Close()
+
+				filesMu.Lock()
+				delete(files, id)
+				filesMu.Unlock()
+			}
+
+		default:
+			fmt.Println("unknown action:", action)
+		}
+		msg.Ack()
+	})
+
+	return nil
+}

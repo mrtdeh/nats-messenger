@@ -33,6 +33,14 @@ func main() {
 	}
 	defer nc.Close()
 
+	receiveFileSubject := fmt.Sprintf("file.%s.%s", cnf.DC, cnf.Name)
+	go func() {
+		err := startFileReceiver(ctx, nc, "/tmp", receiveFileSubject)
+		if err != nil {
+			log.Fatal("startFileReceiver error :", err)
+		}
+	}()
+
 	go func() {
 		if err := nc.StartHealthCheck(); err != nil {
 			log.Fatal("health-check error : ", err)
@@ -62,7 +70,7 @@ func main() {
 	fmt.Println("Listen for path : ", receiveSubject)
 
 	sh.Run(func(sh *Shell, command, args string) error {
-
+		p := strings.Split(sh.path, "/")
 		switch command {
 		case "goto":
 			_, err := nc.cli.kvs.Get(BUCKET_PERSISTENSE, args)
@@ -76,9 +84,18 @@ func main() {
 				return fmt.Errorf("not any path selected")
 			}
 
-			p := strings.Split(sh.path, "/")
 			subject := "chat." + strings.Join(p[1:], ".")
 			_, err := nc.cli.js.Publish(ctx, subject, []byte(args))
+			if err != nil {
+				return err
+			}
+		case "sendfile":
+			if sh.path == "root" || sh.path == "" {
+				return fmt.Errorf("not any path selected")
+			}
+
+			subject := "file." + strings.Join(p[1:], ".")
+			err := sendFileStream(ctx, nc, args, subject)
 			if err != nil {
 				return err
 			}
