@@ -50,7 +50,7 @@ Once inside the container, the CLI will be running. The commands available are:
 **dcs** : List all datacenters in the cluster.
 **exit / quit** : Exit the CLI.
 
-## Usage
+### Usage
 **List of node's path with health(ok/nok) :**
 ```
 root> nodes
