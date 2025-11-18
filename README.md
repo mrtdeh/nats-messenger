@@ -79,7 +79,7 @@ nodes/dc3/app1> sendfile /tmp/test.txt
 send new file name=/tmp/test.txt size=21531 id=877dc70a-315e-4d22-8188-de72b23f5748
 send file finish : 21531/21531
 ```
-**You can sure by see logs of right client :**
+**You can sure by see logs of receiver client :**
 ```
 docker logs -f dc3-app1
 ```
